@@ -1242,20 +1242,24 @@ def has_modules(data):
     return bool(data['module'])  # Will be True if data['module'] is non-empty
 
 # Functions to handle Terraform workspace operations
-def get_current_terraform_workspace():
+def get_current_terraform_workspace(working_dir="."):
     """Get the current Terraform workspace"""
     try:
-        result = subprocess.run(["terraform", "workspace", "show"], capture_output=True, text=True, check=True)
+        result = subprocess.run(["terraform", "workspace", "show"], 
+                               capture_output=True, text=True, check=True,
+                               cwd=working_dir)
         return result.stdout.strip()
     except subprocess.CalledProcessError:
         return "default"  # Assume default workspace if command fails
     except FileNotFoundError:
         return "terraform not found"
 
-def list_terraform_workspaces():
+def list_terraform_workspaces(working_dir="."):
     """List all Terraform workspaces"""
     try:
-        result = subprocess.run(["terraform", "workspace", "list"], capture_output=True, text=True, check=True)
+        result = subprocess.run(["terraform", "workspace", "list"], 
+                               capture_output=True, text=True, check=True,
+                               cwd=working_dir)
         # Parse workspaces, removing leading '* ' from current workspace
         workspaces = []
         for line in result.stdout.strip().split("\n"):
@@ -1269,45 +1273,132 @@ def list_terraform_workspaces():
     except FileNotFoundError:
         return ["terraform not found"]
 
-def create_terraform_workspace(workspace_name):
+def create_terraform_workspace(workspace_name, working_dir="."):
     """Create a new Terraform workspace"""
     try:
         result = subprocess.run(["terraform", "workspace", "new", workspace_name], 
-                                capture_output=True, text=True, check=True)
+                                capture_output=True, text=True, check=True,
+                                cwd=working_dir)
         return True, result.stdout.strip()
     except subprocess.CalledProcessError as e:
         return False, e.stderr.strip()
     except FileNotFoundError:
         return False, "terraform command not found"
 
-def select_terraform_workspace(workspace_name):
+def select_terraform_workspace(workspace_name, working_dir="."):
     """Select an existing Terraform workspace"""
     try:
         result = subprocess.run(["terraform", "workspace", "select", workspace_name], 
-                                capture_output=True, text=True, check=True)
+                                capture_output=True, text=True, check=True,
+                                cwd=working_dir)
         return True, result.stdout.strip()
     except subprocess.CalledProcessError as e:
         return False, e.stderr.strip()
     except FileNotFoundError:
         return False, "terraform command not found"
 
-def prompt_for_workspace_name(stdscr, prompt_text="Enter workspace name:"):
-    """Prompt user for workspace name"""
-    # Save current curses state
+def show_workspace_menu(stdscr, working_dir="."):
+    """Display workspace management menu"""
+    # Save original directory
+    original_dir = os.getcwd()
+    
+    height, width = stdscr.getmaxyx()
+    workspace_menu = [
+        "1. List workspaces",
+        "2. Create new workspace",
+        "3. Select workspace",
+        "4. Return to main view"
+    ]
+    
+    current_workspace = get_current_terraform_workspace(working_dir)
+    
+    # Save current state and switch to normal terminal mode
     curses.def_prog_mode()
     curses.endwin()
     
-    # Get workspace name from user
-    print(prompt_text)
-    workspace_name = input("> ").strip()
+    # Clear screen and show menu
+    os.system('clear' if os.name == 'posix' else 'cls')
+    print("Terraform Workspace Management")
+    print(f"Working directory: {working_dir}")
+    print(f"Current workspace: {current_workspace}\n")
     
-    # Restore curses state
+    for item in workspace_menu:
+        print(item)
+    
+    print("\nSelect an option (1-4): ", end="", flush=True)
+    choice = input().strip()
+    
+    result_message = ""
+    if choice == "1":
+        # List workspaces
+        workspaces = list_terraform_workspaces(working_dir)
+        print("\nAvailable workspaces:")
+        for workspace in workspaces:
+            if workspace == current_workspace:
+                print(f"* {workspace} (current)")
+            else:
+                print(f"  {workspace}")
+        print("\nPress Enter to continue...", end="", flush=True)
+        input()
+    elif choice == "2":
+        # Create new workspace
+        print("\nEnter new workspace name: ", end="", flush=True)
+        new_workspace = input().strip()
+        if new_workspace:
+            success, message = create_terraform_workspace(new_workspace, working_dir)
+            print(f"\n{message}")
+            print("\nPress Enter to continue...", end="", flush=True)
+            input()
+            result_message = f"Created workspace: {new_workspace}" if success else f"Error: {message}"
+        else:
+            print("\nNo workspace name provided. Operation cancelled.")
+            print("\nPress Enter to continue...", end="", flush=True)
+            input()
+    elif choice == "3":
+        # Select workspace
+        workspaces = list_terraform_workspaces(working_dir)
+        print("\nAvailable workspaces:")
+        for idx, workspace in enumerate(workspaces, 1):
+            if workspace == current_workspace:
+                print(f"{idx}. {workspace} (current)")
+            else:
+                print(f"{idx}. {workspace}")
+        
+        print("\nSelect workspace number or enter workspace name: ", end="", flush=True)
+        selection = input().strip()
+        
+        # Check if selection is a number (index) or name
+        selected_workspace = None
+        if selection.isdigit():
+            idx = int(selection) - 1
+            if 0 <= idx < len(workspaces):
+                selected_workspace = workspaces[idx]
+        else:
+            if selection in workspaces:
+                selected_workspace = selection
+        
+        if selected_workspace:
+            success, message = select_terraform_workspace(selected_workspace, working_dir)
+            print(f"\n{message}")
+            print("\nPress Enter to continue...", end="", flush=True)
+            input()
+            result_message = f"Switched to workspace: {selected_workspace}" if success else f"Error: {message}"
+        else:
+            print("\nInvalid workspace selection.")
+            print("\nPress Enter to continue...", end="", flush=True)
+            input()
+    
+    # Make sure we're back in our original directory before restoring curses
+    os.chdir(original_dir)
+    
+    # Restore terminal to curses mode
     stdscr = curses.initscr()
     curses.reset_prog_mode()
-    curses.curs_set(0)  # Hide cursor
-    stdscr.refresh()
+    curses.curs_set(0)
+    stdscr.clear()  # Clear the screen to fix blank screen issue
+    stdscr.refresh()  # Refresh to update display immediately
     
-    return workspace_name if workspace_name else None
+    return result_message
 
 def init_colors():
     """Initialize color pairs for syntax highlighting"""
@@ -1446,99 +1537,6 @@ def save_block_to_file(block_content, suggested_filename="block.tf"):
         return True, f"Saved to {filename}"
     except Exception as e:
         return False, f"Error saving file: {str(e)}"
-
-def show_workspace_menu(stdscr):
-    """Display workspace management menu"""
-    height, width = stdscr.getmaxyx()
-    workspace_menu = [
-        "1. List workspaces",
-        "2. Create new workspace",
-        "3. Select workspace",
-        "4. Return to main view"
-    ]
-    
-    current_workspace = get_current_terraform_workspace()
-    
-    # Save current state and switch to normal terminal mode
-    curses.def_prog_mode()
-    curses.endwin()
-    
-    # Clear screen and show menu
-    os.system('clear' if os.name == 'posix' else 'cls')
-    print("Terraform Workspace Management")
-    print(f"Current workspace: {current_workspace}\n")
-    
-    for item in workspace_menu:
-        print(item)
-    
-    print("\nSelect an option (1-4): ", end="", flush=True)
-    choice = input().strip()
-    
-    result_message = ""
-    if choice == "1":
-        # List workspaces
-        workspaces = list_terraform_workspaces()
-        print("\nAvailable workspaces:")
-        for workspace in workspaces:
-            if workspace == current_workspace:
-                print(f"* {workspace} (current)")
-            else:
-                print(f"  {workspace}")
-        print("\nPress Enter to continue...", end="", flush=True)
-        input()
-    elif choice == "2":
-        # Create new workspace
-        print("\nEnter new workspace name: ", end="", flush=True)
-        new_workspace = input().strip()
-        if new_workspace:
-            success, message = create_terraform_workspace(new_workspace)
-            print(f"\n{message}")
-            print("\nPress Enter to continue...", end="", flush=True)
-            input()
-            result_message = f"Created workspace: {new_workspace}" if success else f"Error: {message}"
-        else:
-            print("\nNo workspace name provided. Operation cancelled.")
-            print("\nPress Enter to continue...", end="", flush=True)
-            input()
-    elif choice == "3":
-        # Select workspace
-        workspaces = list_terraform_workspaces()
-        print("\nAvailable workspaces:")
-        for idx, workspace in enumerate(workspaces, 1):
-            if workspace == current_workspace:
-                print(f"{idx}. {workspace} (current)")
-            else:
-                print(f"{idx}. {workspace}")
-        
-        print("\nSelect workspace number or enter workspace name: ", end="", flush=True)
-        selection = input().strip()
-        
-        # Check if selection is a number (index) or name
-        selected_workspace = None
-        if selection.isdigit():
-            idx = int(selection) - 1
-            if 0 <= idx < len(workspaces):
-                selected_workspace = workspaces[idx]
-        else:
-            if selection in workspaces:
-                selected_workspace = selection
-        
-        if selected_workspace:
-            success, message = select_terraform_workspace(selected_workspace)
-            print(f"\n{message}")
-            print("\nPress Enter to continue...", end="", flush=True)
-            input()
-            result_message = f"Switched to workspace: {selected_workspace}" if success else f"Error: {message}"
-        else:
-            print("\nInvalid workspace selection.")
-            print("\nPress Enter to continue...", end="", flush=True)
-            input()
-    
-    # Restore terminal to curses mode
-    stdscr = curses.initscr()
-    curses.reset_prog_mode()
-    curses.curs_set(0)  # Hide cursor
-    return result_message
 
 # Main UI loop
 def main(stdscr):
@@ -1700,14 +1698,17 @@ def main(stdscr):
             is_error_status = False
         elif key == ord('W'):  # Shift+W for workspace management
             # Show workspace menu and get result
-            result = show_workspace_menu(stdscr)
+            result = show_workspace_menu(stdscr, working_directory)
             if result:
                 status_message = result
                 # Refresh terraform data in case workspace changed
-                terraform_data = parse_terraform_files(".")
+                terraform_data = parse_terraform_files(working_directory)
             else:
-                status_message = f"Current workspace: {get_current_terraform_workspace()}"
+                status_message = f"Current workspace: {get_current_terraform_workspace(working_directory)}"
             is_error_status = False
+            stdscr.clear()  # Clear the screen after workspace operations
+            stdscr.refresh()  # Force refresh to update display
+
         elif key == ord('h'):  # Show help screen
             show_help_screen(stdscr)
             # Need to redraw after help screen
@@ -2375,10 +2376,6 @@ def main(stdscr):
                         # Go back to file column if no content
                         active_column = 0
                         selected_block_index = -1
-                else:  # Content column is active
-                    # Switch back to file column
-                    active_column = 0
-                    selected_block_index = -1
         elif key == ord('/'):  # Search action
             # Only allow search when in file view
             if view == 1:
@@ -2512,6 +2509,9 @@ def main(stdscr):
 if __name__ == "__main__":
     try:
         curses.wrapper(main)
+    except KeyboardInterrupt:
+        # Handle Ctrl+C gracefully
+        pass
     except KeyboardInterrupt:
         # Handle Ctrl+C gracefully
         pass
