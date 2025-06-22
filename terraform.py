@@ -16,6 +16,65 @@ from pygments.styles import get_style_by_name
 selected_index = 0
 selected_block_index = -1  # For selecting blocks in the second column
 
+# Check if a directory contains Terraform files
+def has_terraform_files(directory):
+    """Check if the specified directory contains .tf or .tfstate files."""
+    if not os.path.isdir(directory):
+        return False
+    
+    for file in os.listdir(directory):
+        if file.endswith(".tf") or file.endswith(".tfstate") or file.endswith(".tfvars"):
+            return True
+    
+    return False
+
+# Prompt for directory selection
+def select_directory(stdscr):
+    """Prompt user to select a directory with Terraform files."""
+    curses.def_prog_mode()
+    curses.endwin()
+    
+    # Clear screen for better UX
+    os.system('clear')
+    print("\n\n==== TERRAFORM DIRECTORY SELECTION ====")
+    print("No Terraform files (.tf, .tfstate) found in the current directory.")
+    print("Please enter the path to a directory containing Terraform files:")
+    
+    while True:
+        directory = input("> ").strip()
+        
+        # Handle empty input - use current directory
+        if not directory:
+            directory = "."
+        
+        # Expand user home directory if needed
+        if directory.startswith("~"):
+            directory = os.path.expanduser(directory)
+        
+        # Make sure the path is absolute
+        directory = os.path.abspath(directory)
+        
+        # Check if it's a valid directory
+        if not os.path.isdir(directory):
+            print(f"Error: '{directory}' is not a valid directory. Please try again:")
+            continue
+        
+        # Check if it contains Terraform files
+        if has_terraform_files(directory):
+            print(f"Found Terraform files in {directory}")
+            print("Press Enter to continue...")
+            input()
+            break
+        else:
+            print(f"No Terraform files found in {directory}. Please try another directory:")
+    
+    # Restore terminal to curses mode
+    stdscr = curses.initscr()
+    curses.reset_prog_mode()
+    curses.curs_set(0)
+    
+    return directory
+
 # Parse .tf and .tfvars files
 def parse_terraform_files(directory):
     terraform_data = {}
@@ -1504,8 +1563,14 @@ def main(stdscr):
     # Initialize color pairs for syntax highlighting if terminal supports it
     init_colors()
 
-    terraform_data = parse_terraform_files(".")
-    status_message = "Welcome to Terraform TUI"
+    # Check if the current directory has Terraform files
+    working_directory = "."
+    if not has_terraform_files(working_directory):
+        working_directory = select_directory(stdscr)
+    
+    # Parse terraform files from selected directory
+    terraform_data = parse_terraform_files(working_directory)
+    status_message = f"Working with Terraform files in: {working_directory}"
     is_error_status = False
 
     while True:
@@ -1513,17 +1578,28 @@ def main(stdscr):
         height, width = stdscr.getmaxyx()
         max_rows = height - 6  # Accounting for headers, borders, and status line
         
-        # Get current Terraform workspace
-        current_workspace = get_current_terraform_workspace()
+        # Get current Terraform workspace - use the selected directory
+        try:
+            current_workspace = get_current_terraform_workspace()
+        except:
+            current_workspace = "unknown"
         
         # Update instructions to include new features
         stdscr.addstr(0, 2, f"Terraform TUI (1/2/3: Views, ↑↓: Navigate, Tab: Columns, e: Edit, /: Search, h: Help, s: Save, W: Workspace, q: Quit)")
         
-        # Display current workspace in the header
+        # Display current workspace in the header and working directory
         workspace_info = f"Workspace: {current_workspace}"
         # Position workspace info on the right side of the header
         workspace_x = max(0, width - len(workspace_info) - 2)
-        stdscr.addstr(0, workspace_x, workspace_info)        # Initialize view-specific variables
+        stdscr.addstr(0, workspace_x, workspace_info)
+        
+        # Show working directory under the header
+        dir_info = f"Dir: {working_directory}"
+        if len(dir_info) > width - 2:  # Truncate if too long
+            dir_info = f"Dir: ...{working_directory[-(width-10):]}"
+        stdscr.addstr(height-2, 0, dir_info)
+        
+        # Initialize view-specific variables
         if view == 1:
             files = [f for f in terraform_data.keys() if not f.endswith("_raw")]
             # Make sure selected_index is valid
@@ -2416,6 +2492,21 @@ def main(stdscr):
                 view = 3
             else:
                 view = 1
+        elif key == ord('D'):  # Shift+D to change directory
+            new_directory = select_directory(stdscr)
+            if new_directory != working_directory:
+                working_directory = new_directory
+                # Parse terraform files from the new directory
+                terraform_data = parse_terraform_files(working_directory)
+                # Reset view selections
+                selected_index = 0
+                selected_block_index = -1
+                active_column = 0
+                file_scroll_offset = 0
+                block_scroll_offset = 0
+                content_scroll_offset = 0
+                status_message = f"Working with Terraform files in: {working_directory}"
+                is_error_status = False
 
 # Move the main wrapper call to the end of the file
 if __name__ == "__main__":
